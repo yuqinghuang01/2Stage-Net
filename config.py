@@ -8,11 +8,11 @@ Dataset configurations:
     :param BACKGROUND_AS_CLASS -> if True, the model treats background as a class
 
 """""
-DATASET_PATH = '/PATH/TO/THE/DATASET'
-TASK_ID = 9
+DATASET_PATH = 'data/'
+TASK_ID = 2
 IN_CHANNELS = 1
 NUM_CLASSES = 1
-BACKGROUND_AS_CLASS = False
+BACKGROUND_AS_CLASS = True
 
 
 """""
