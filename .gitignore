@@ -22,6 +22,5 @@ dist/
 data/
 Datasets/
 
-# Others
-netscratc/
+# Checkpoints
 checkpoints/

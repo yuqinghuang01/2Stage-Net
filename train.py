@@ -6,10 +6,11 @@ from config import (
 )
 from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
 from torchmetrics.functional import dice
+from torchmetrics import Precision, Recall, AUROC
 from dataset import get_train_val_test_Dataloaders
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
-from unet3d import UNet3D
+from models.unet3d import UNet3D
 from transforms import (train_transform, train_transform_cuda,
                         val_transform, val_transform_cuda)
 
