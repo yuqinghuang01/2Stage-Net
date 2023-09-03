@@ -10,7 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 import torch
 from torch.utils.data import random_split
 from config import (
-    DATASET_PATH, TASK_ID, TRAIN_VAL_TEST_SPLIT,
+    DATASET_PATH, DATASET_TYPE, TASK_ID, TRAIN_VAL_TEST_SPLIT, SPLIT_SEED,
     TRAIN_BATCH_SIZE, VAL_BATCH_SIZE, TEST_BATCH_SIZE
 )
 
@@ -74,7 +74,7 @@ class MedicalSegmentationDecathlon(Dataset):
         self.mode = mode
         #Spliting dataset
         samples = self.meta["training"]
-        shuffle(samples)
+        shuffle(samples, random_state=SPLIT_SEED)
         self.train = samples[0:train_val_test[0]]
         self.val = samples[train_val_test[0]:train_val_test[0] + train_val_test[1]]
         self.test = samples[train_val_test[1]:train_val_test[1] + train_val_test[2]]
@@ -109,6 +109,7 @@ class MedicalSegmentationDecathlon(Dataset):
         label_object = nib.load(label_path)
         img_array = img_object.get_fdata()
         #Converting to channel-first numpy array
+        #print("before: ", img_array.shape)
         img_array = np.moveaxis(img_array, -1, 0)
         label_array = label_object.get_fdata()
         label_array = np.moveaxis(label_array, -1, 0)
@@ -135,14 +136,15 @@ class AneurysmSegmentationUSZ(Dataset):
     :param task_number -> represent the type of segmentation task to perform
                           1 : UIAs (2-class segmentation)
                           2 : UIAs, collapsed vessels (3-class segmentation)
-                          3 : UIAs, vessels (22-class segmentation)
+                          3 : Vessel ICA (2-class segmentation)
+                          4 : UIAs, vessels (22-class segmentation)
     :param dir_path -> the dataset directory path to .h5 files
     :param transform -> optional - transforms to be applied on each instance
     """
     def __init__(self, task_number, dir_path, split_ratios = [0.8, 0.1, 0.1], transforms = None, mode = None) -> None:
-        super(MedicalSegmentationDecathlon, self).__init__()
+        super(AneurysmSegmentationUSZ, self).__init__()
         #Specify the task type
-        self.task_number = str(task_number)
+        self.task_number = task_number
         #Path to extracted dataset
         self.dir = dir_path
         #Meta data about the dataset
@@ -150,12 +152,12 @@ class AneurysmSegmentationUSZ(Dataset):
         self.splits = split_ratios
         self.transform = transforms
         #Calculating split number of images
-        num_training_imgs =  len(self.meta)
+        num_training_imgs =  len(samples)
         train_val_test = [int(x * num_training_imgs) for x in split_ratios]
         if(sum(train_val_test) != num_training_imgs): train_val_test[0] += (num_training_imgs - sum(train_val_test))
         self.mode = mode
         #Spliting dataset
-        shuffle(samples)
+        shuffle(samples, random_state=SPLIT_SEED)
         self.train = samples[0:train_val_test[0]]
         self.val = samples[train_val_test[0]:train_val_test[0] + train_val_test[1]]
         self.test = samples[train_val_test[1]:train_val_test[1] + train_val_test[2]]
@@ -191,18 +193,26 @@ class AneurysmSegmentationUSZ(Dataset):
         label_object = h5py.File(label_path, 'r')
         #Converting to channel-first numpy array
         img_array = np.array(img_object['data'])
+        #print("before: ", img_array.shape)
         img_array = np.moveaxis(img_array, -1, 0)
+        #print("after: ", img_array.shape)
         label_array = np.array(label_object['data'])
         label_array = np.moveaxis(label_array, -1, 0)
         #Modify label array based on task type
         if self.task_number == 1:
-            background_mask = (label_array != 4)
-            label_array[background_mask]  = 0
-        elif self.task_numer == 2:
+            aneurysm_mask = (label_array == 4)
+            label_array = np.zeros_like(label_array)
+            label_array[aneurysm_mask] = 1
+        elif self.task_number == 2:
             aneurysm_mask = (label_array == 4)
             label_array[aneurysm_mask] = 0
             label_array[label_array != 0] = 2
             label_array[aneurysm_mask] = 1
+        elif self.task_number == 3:
+            ica_vessel_mask = (label_array == 1)
+            label_array = np.zeros_like(label_array)
+            label_array[ica_vessel_mask] = 1
+        #else use all available labels
         proccessed_out = {'name': name, 'image': img_array, 'label': label_array} 
         if self.transform:
             if self.mode == "train":
@@ -227,15 +237,20 @@ def get_train_val_test_Dataloaders(train_transforms, val_transforms, test_transf
     Note: all the configs to generate dataloaders in included in "config.py"
     """
 
-    dataset = MedicalSegmentationDecathlon(task_number=TASK_ID, dir_path=DATASET_PATH, split_ratios=TRAIN_VAL_TEST_SPLIT, transforms=[train_transforms, val_transforms, test_transforms])
-
+    if DATASET_TYPE == 'tar':
+        dataset = MedicalSegmentationDecathlon(task_number=TASK_ID, dir_path=DATASET_PATH, split_ratios=TRAIN_VAL_TEST_SPLIT, transforms=[train_transforms, val_transforms, test_transforms])
+    elif DATASET_TYPE == 'hdf5':
+        dataset = AneurysmSegmentationUSZ(task_number=TASK_ID, dir_path=DATASET_PATH, split_ratios=TRAIN_VAL_TEST_SPLIT, transforms=[train_transforms, val_transforms, test_transforms])
+    else:
+        raise ValueError("Dataset type not supported currently.")
+    
     #Spliting dataset and building their respective DataLoaders
     train_set, val_set, test_set = copy.deepcopy(dataset), copy.deepcopy(dataset), copy.deepcopy(dataset)
     train_set.set_mode('train')
     val_set.set_mode('val')
     test_set.set_mode('test')
-    train_dataloader = DataLoader(dataset= train_set, batch_size= TRAIN_BATCH_SIZE, shuffle= False)
-    val_dataloader = DataLoader(dataset= val_set, batch_size= VAL_BATCH_SIZE, shuffle= False)
-    test_dataloader = DataLoader(dataset= test_set, batch_size= TEST_BATCH_SIZE, shuffle= False)
+    train_dataloader = DataLoader(dataset=train_set, batch_size=TRAIN_BATCH_SIZE, shuffle=False)
+    val_dataloader = DataLoader(dataset=val_set, batch_size=VAL_BATCH_SIZE, shuffle=False)
+    test_dataloader = DataLoader(dataset=test_set, batch_size=TEST_BATCH_SIZE, shuffle=False)
     
     return train_dataloader, val_dataloader, test_dataloader

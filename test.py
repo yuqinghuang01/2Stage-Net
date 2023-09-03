@@ -1,11 +1,11 @@
 import os
 import torch
 from config import (
-    NUM_CLASSES, IN_CHANNELS, BACKGROUND_AS_CLASS, TRAIN_CUDA
+    NUM_CLASSES, IN_CHANNELS, BOTTLENECK_CHANNEL, BACKGROUND_AS_CLASS, TRAIN_CUDA
 )
 from dataset import get_train_val_test_Dataloaders
 from torch.utils.tensorboard import SummaryWriter
-from unet3d import UNet3D
+from models.unet3d import UNet3D
 from transforms import (train_transform, train_transform_cuda,
                         val_transform, val_transform_cuda)
 from monai.visualize import plot_2d_or_3d_image
@@ -14,7 +14,7 @@ if BACKGROUND_AS_CLASS: NUM_CLASSES += 1
 
 writer = SummaryWriter("log/")
 
-model = UNet3D(in_channels=IN_CHANNELS , num_classes=NUM_CLASSES, level_channels=[4, 8, 16], bottleneck_channel=32)
+model = UNet3D(in_channels=IN_CHANNELS , num_classes=NUM_CLASSES, level_channels=[int(BOTTLENECK_CHANNEL/8), int(BOTTLENECK_CHANNEL/4), int(BOTTLENECK_CHANNEL/2)], bottleneck_channel=BOTTLENECK_CHANNEL)
 train_transforms = train_transform
 val_transforms = val_transform
 
