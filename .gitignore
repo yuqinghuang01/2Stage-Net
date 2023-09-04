@@ -22,5 +22,8 @@ dist/
 data/
 Datasets/
 
+# Graph visualizations
+graphs/
+
 # Checkpoints
 #checkpoints/

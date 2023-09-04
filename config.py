@@ -42,4 +42,10 @@ VAL_BATCH_SIZE = 1
 TEST_BATCH_SIZE = 1
 BCE_WEIGHTS = [0.04, 0.96]
 TRAIN_CUDA = True
-EDGE_DIST_THRESH = 6
+
+"""""
+Graph configurations:
+    :param 
+"""""
+EDGE_DIST_THRESH = 10
+WINDOW_SIZE = 8
