@@ -1,31 +1,53 @@
-import numpy as np
-import tensorflow as tf
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from models.layers import GraphAttentionLayer, SpGraphAttentionLayer
 
-from utils import layers
-from models.base_gattn import BaseGAttN
 
-class GAT(BaseGAttN):
-    def inference(inputs, nb_classes, nb_nodes, training, attn_drop, ffd_drop,
-            bias_mat, hid_units, n_heads, activation=tf.nn.elu, residual=False):
-        attns = []
-        for _ in range(n_heads[0]):
-            attns.append(layers.attn_head(inputs, bias_mat=bias_mat,
-                out_sz=hid_units[0], activation=activation,
-                in_drop=ffd_drop, coef_drop=attn_drop, residual=False))
-        h_1 = tf.concat(attns, axis=-1)
-        for i in range(1, len(hid_units)):
-            h_old = h_1
-            attns = []
-            for _ in range(n_heads[i]):
-                attns.append(layers.attn_head(h_1, bias_mat=bias_mat,
-                    out_sz=hid_units[i], activation=activation,
-                    in_drop=ffd_drop, coef_drop=attn_drop, residual=residual))
-            h_1 = tf.concat(attns, axis=-1)
-        out = []
-        for i in range(n_heads[-1]):
-            out.append(layers.attn_head(h_1, bias_mat=bias_mat,
-                out_sz=nb_classes, activation=lambda x: x,
-                in_drop=ffd_drop, coef_drop=attn_drop, residual=False))
-        logits = tf.add_n(out) / n_heads[-1]
-    
-        return logits
+class GAT(nn.Module):
+    def __init__(self, nfeat, nhid, nclass, dropout, alpha, nheads):
+        """Dense version of GAT."""
+        super(GAT, self).__init__()
+        self.dropout = dropout
+
+        self.attentions = [GraphAttentionLayer(nfeat, nhid, dropout=dropout, alpha=alpha, concat=True) for _ in range(nheads)]
+        for i, attention in enumerate(self.attentions):
+            self.add_module('attention_{}'.format(i), attention)
+
+        self.out_att = GraphAttentionLayer(nhid * nheads, nclass, dropout=dropout, alpha=alpha, concat=False)
+
+    def forward(self, x, adj):
+        x = F.dropout(x, self.dropout, training=self.training)
+        x = torch.cat([att(x, adj) for att in self.attentions], dim=1)
+        x = F.dropout(x, self.dropout, training=self.training)
+        x = F.elu(self.out_att(x, adj))
+        return F.log_softmax(x, dim=1)
+
+
+class SpGAT(nn.Module):
+    def __init__(self, nfeat, nhid, nclass, dropout, alpha, nheads):
+        """Sparse version of GAT."""
+        super(SpGAT, self).__init__()
+        self.dropout = dropout
+
+        self.attentions = [SpGraphAttentionLayer(nfeat, 
+                                                 nhid, 
+                                                 dropout=dropout, 
+                                                 alpha=alpha, 
+                                                 concat=True) for _ in range(nheads)]
+        for i, attention in enumerate(self.attentions):
+            self.add_module('attention_{}'.format(i), attention)
+
+        self.out_att = SpGraphAttentionLayer(nhid * nheads, 
+                                             nclass, 
+                                             dropout=dropout, 
+                                             alpha=alpha, 
+                                             concat=False)
+
+    def forward(self, x, adj):
+        x = F.dropout(x, self.dropout, training=self.training)
+        x = torch.cat([att(x, adj) for att in self.attentions], dim=1)
+        x = F.dropout(x, self.dropout, training=self.training)
+        x = F.elu(self.out_att(x, adj))
+        return F.log_softmax(x, dim=1)
+

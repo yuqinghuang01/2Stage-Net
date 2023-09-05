@@ -19,7 +19,7 @@ BACKGROUND_AS_CLASS = True
 
 
 """""
-Training configurations:
+U-Net training configurations:
     :param TRAIN_VAL_TEST_SPLIT -> delineates the ratios in which the dataset shoud be splitted. The length of the array should be 3.
     :param SPLIT_SEED -> the random seed with which the dataset is splitted
     :param TRAINING_EPOCH -> number of training epochs
@@ -44,8 +44,17 @@ BCE_WEIGHTS = [0.04, 0.96]
 TRAIN_CUDA = True
 
 """""
-Graph configurations:
-    :param 
+GAT training configurations:
+    :param DROPOUT -> dropout rate (1 - keep probability)
+    :param ALPHA -> Alpha value for the leakyrelu
+    :param HIDDEN -> number of hidden units in GAT
+    :param NUM_ATTEN_HEADS -> number of head attentions
+    :param WEIGHT_DECAY -> weight decay (L2 loss on parameters)
 """""
 EDGE_DIST_THRESH = 10
 WINDOW_SIZE = 8
+DROPOUT = 0.5
+ALPHA = 0.2
+HIDDEN = 8
+NUM_ATTEN_HEADS = 8
+WEIGHT_DECAY = 5e-4

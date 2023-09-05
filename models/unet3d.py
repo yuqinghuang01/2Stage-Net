@@ -80,7 +80,13 @@ class UpConv3DBlock(nn.Module):
         if residual!=None: out = torch.cat((out, residual), 1)
         out = self.relu(self.bn(self.conv1(out)))
         out = self.relu(self.bn(self.conv2(out)))
-        if self.last_layer: out = self.conv3(out)
+
+        #retrieve last layer features for GNN plug-in
+        if self.last_layer:
+            feature = out
+            out = self.conv3(out)
+            return out, feature
+        
         return out
         
 
