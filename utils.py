@@ -7,10 +7,8 @@ import skfmm
 from tqdm import tqdm
 
 from config import (
-    BOTTLENECK_CHANNEL, PATCH_SIZE_X, PATCH_SIZE_Y, PATCH_SIZE_Z, EDGE_DIST_THRESH, WINDOW_SIZE
+    PATCH_SIZE_X, PATCH_SIZE_Y, PATCH_SIZE_Z, EDGE_DIST_THRESH, WINDOW_SIZE
 )
-
-NUM_FEATURES = int(BOTTLENECK_CHANNEL/8)
 
 def encode_onehot(labels):
     # The classes must be sorted before encoding to enable static class encoding.
@@ -57,7 +55,7 @@ def load_data(path="./data/cora/", dataset="cora"):
     return adj, features, labels, idx_train, idx_val, idx_test
 
 
-def build_graph(vesselness, feature):
+def build_graph(vesselness):
     '''
     Build graph from ground truth vessel probabilities
     Vertex sampling: Input image partitioned into non-overlapping regions (patches),
@@ -67,7 +65,7 @@ def build_graph(vesselness, feature):
     Vertex features: feature extracted from the last layer of U-Net before output
     '''
     #find local maxima
-    features = np.zeros((0, NUM_FEATURES))
+    feature_mask = np.zeros(vesselness.shape)
     labels = []
     max_pos = []
     x_quan = range(0, vesselness.shape[0], WINDOW_SIZE)
@@ -79,14 +77,14 @@ def build_graph(vesselness, feature):
                 cur_win = vesselness[x_idx:x_idx+WINDOW_SIZE, y_idx:y_idx+WINDOW_SIZE, z_idx:z_idx+WINDOW_SIZE]
                 if np.sum(cur_win) == 0:
                     pos = (int(x_idx+WINDOW_SIZE/2), int(y_idx+WINDOW_SIZE/2), int(z_idx+WINDOW_SIZE/2))
-                    features = np.append(features, feature[pos].detach().cpu().numpy()[np.newaxis,:], axis=0)
+                    feature_mask[pos] = 1
                     labels.append(vesselness[pos])
                     max_pos.append(pos)
                 else:
                     #print(np.max(cur_win))
                     temp = np.unravel_index(cur_win.argmax(), cur_win.shape)
                     pos = (int(x_idx+temp[0]), int(y_idx+temp[0]), int(z_idx+temp[0]))
-                    features = np.append(features, feature[pos].detach().cpu().numpy()[np.newaxis,:], axis=0)
+                    feature_mask[pos] = 1
                     labels.append(vesselness[pos])
                     max_pos.append(pos)
         
@@ -103,7 +101,7 @@ def build_graph(vesselness, feature):
     #add edges 
     node_list = list(graph.nodes)
     edges = np.zeros((0, 2))
-    for i, n in enumerate(tqdm(node_list)):
+    for i, n in enumerate(node_list):
         if vesselness[graph.nodes[n]['x'], graph.nodes[n]['y'], graph.nodes[n]['z']] == 0:
             continue
         neighbor = vesselness[max(0, graph.nodes[n]['x']-1):min(PATCH_SIZE_X, graph.nodes[n]['x']+2), \
@@ -113,9 +111,9 @@ def build_graph(vesselness, feature):
         if np.mean(neighbor) < 0.1:
             continue
 
-        phi = np.ones_like(vesselness)
-        phi[graph.nodes[n]['x'], graph.nodes[n]['y'], graph.nodes[n]['z']] = -1
-        #print(np.unique(phi))
+        phi = np.ones(vesselness.shape)
+        phi[graph.nodes[n]['x'], graph.nodes[n]['y'], graph.nodes[n]['z']] = 0
+        #print(graph.nodes[n]['x'], graph.nodes[n]['y'], graph.nodes[n]['z'], np.unique(phi))
         tt = skfmm.travel_time(phi, vesselness, narrow=EDGE_DIST_THRESH)
 
         for n_comp in node_list[i+1:]:
@@ -130,10 +128,6 @@ def build_graph(vesselness, feature):
     labels = encode_onehot(labels)
     labels = torch.LongTensor(np.where(labels)[1])
 
-    features = sp.csr_matrix(features, dtype=np.float32)
-    features = normalize_features(features)
-    features = torch.FloatTensor(np.array(features.todense()))
-
     adj = sp.coo_matrix((np.ones(edges.shape[0]), (edges[:,0], edges[:,1])), shape=(labels.shape[0], labels.shape[0]), dtype=np.float32)
     adj = adj + adj.T.multiply(adj.T > adj) - adj.multiply(adj.T > adj) #build symmetric adjacency matrix
     adj = normalize_adj(adj + sp.eye(adj.shape[0]))
@@ -142,7 +136,7 @@ def build_graph(vesselness, feature):
     idx_train = np.arange(0, len(max_pos))
     idx_train = torch.LongTensor(idx_train)
 
-    return adj, features, labels, idx_train
+    return adj, feature_mask, labels, idx_train
 
 
 def normalize_adj(mx):

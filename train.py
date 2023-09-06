@@ -8,7 +8,7 @@ from torch.autograd import Variable
 from config import (
     TRAINING_EPOCH, NUM_CLASSES, IN_CHANNELS, BOTTLENECK_CHANNEL, BACKGROUND_AS_CLASS, TRAIN_CUDA,
     VAL_BATCH_SIZE, PATCH_SIZE_X, PATCH_SIZE_Y, PATCH_SIZE_Z, BCE_WEIGHTS,
-    DROPOUT, ALPHA, HIDDEN, NUM_ATTEN_HEADS, WEIGHT_DECAY
+    DROPOUT, ALPHA, HIDDEN, NUM_ATTEN_HEADS, WEIGHT_DECAY_UNET, WEIGHT_DECAY_GAT, ALPHA, BETA
 )
 from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
 from torchmetrics.functional import dice
@@ -19,8 +19,8 @@ from torch.utils.tensorboard import SummaryWriter
 from models.unet3d import UNet3D
 from transforms import (train_transform, train_transform_cuda,
                         val_transform, val_transform_cuda)
-from utils import load_data, build_graph, accuracy
-from models.gat import GAT, SpGAT
+from utils import build_graph, accuracy
+from models.gat import GAT
 
 if BACKGROUND_AS_CLASS: NUM_CLASSES += 1
 
@@ -56,8 +56,8 @@ elif not torch.cuda.is_available() and TRAIN_CUDA:
 train_dataloader, val_dataloader, _ = get_train_val_test_Dataloaders(train_transforms=train_transforms, val_transforms=val_transforms, test_transforms= val_transforms)
 
 
-optimizer_unet = Adam(params=unet.parameters())
-optimizer_gat = Adam(params=gat.parameters(), weight_decay=WEIGHT_DECAY)
+optimizer_unet = Adam(params=unet.parameters(), weight_decay=WEIGHT_DECAY_UNAT)
+optimizer_gat = Adam(params=gat.parameters(), weight_decay=WEIGHT_DECAY_GAT)
 
 min_valid_loss = math.inf
 
@@ -75,18 +75,22 @@ for epoch in range(TRAINING_EPOCH):
         
             optimizer_unet.zero_grad()
 
-            output, feature = unet(img) #model returns last layer features so we can insert GCCM plug-in here (based on GAT)
+            output, features = unet(img) #model returns last layer features so we can insert GCCM plug-in here (based on GAT)
             #print(output.size()) #[1, C, 64, 64, 64]
             #print(gt.size()) #[1, 64, 64, 64]
 
-            #construct graph from gt, cnn features as node features
+            #construct graph from gt, sample cnn features as node features
             vesselness = gt.squeeze(0).detach().cpu().numpy().astype(np.double)
-            feature = torch.moveaxis(feature, 1, -1) #print(feature.size()) #[1, 64, 64, 64, 8]
-            adj, features, labels, idx_train = build_graph(vesselness, feature.squeeze(0))
-            features, adj, labels = Variable(features), Variable(adj), Variable(labels)
+            adj, feature_mask, labels, idx_train = build_graph(vesselness)
+
+            #apply feature mask to feature
+            features = torch.moveaxis(features, 1, -1).squeeze(0) #print(features.size()) #[64, 64, 64, 8]
+            features = F.normalize(features, dim=3)
+            feature_mask = torch.from_numpy(feature_mask).bool().to(device)
+            features = features[feature_mask,:]
+            #print(features.size()) #[512, 8]
 
             if device == 'cuda':
-                features = features.cuda()
                 adj = adj.cuda()
                 labels = labels.cuda()
                 idx_train = idx_train.cuda()
@@ -97,21 +101,25 @@ for epoch in range(TRAINING_EPOCH):
             output_gat = gat(features, adj)
             loss_train = F.nll_loss(output_gat[idx_train], labels[idx_train])
             acc_train = accuracy(output_gat[idx_train], labels[idx_train])
-            loss_train.backward()
-            optimizer_gat.step()
 
             print('GAT:',
                   'loss_train: {:.4f}'.format(loss_train.data.item()),
                   'acc_train: {:.4f}'.format(acc_train.data.item()))
 
             #sum up unet loss and connectivity constraints loss
-            loss = loss_train + criterion(output, gt)
+            loss = BETA * loss_train + ALPHA * criterion(output, gt)
             crops_loss += loss.item()
 
             output = torch.softmax(output, dim=1)
             metric += dice(output, gt, ignore_index=0)
             print(metric)
             loss.backward()
+
+            #print(unet.s_block1.conv2.weight.grad)
+            #for param in gat.parameters():
+            #    print(param.grad)
+
+            optimizer_gat.step()
             optimizer_unet.step()
 
         train_loss += crops_loss / len(crops)
@@ -136,7 +144,7 @@ for epoch in range(TRAINING_EPOCH):
                 data_patch = patches_batch['data'][tio.DATA].to(device)
                 locations_patch = patches_batch[tio.LOCATION]
                 #print(data_patch.size()) [1, 1, 64, 64, 64]
-                patch_output, feature = unet(data_patch)
+                patch_output, features = unet(data_patch)
                 #print(patch_output.size()) [1, C, 64, 64, 64]
                 patch_gt = torch.squeeze(patches_batch['target'][tio.DATA].to(device), dim=1).long()
                 patch_loss += criterion(patch_output, patch_gt)
