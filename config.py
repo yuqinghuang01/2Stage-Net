@@ -9,14 +9,15 @@ Dataset configurations:
     :param BACKGROUND_AS_CLASS -> if True, the model treats background as a class
 
 """""
-DATASET_PATH = '/../../usr/bmicnas02/data-biwi-01/bmicdatasets-originals/Originals/USZ_BrainArtery/Processed/hdf5_dataset' #'data/'
-DATASET_TYPE = 'hdf5' #'tar'
-TASK_ID = 3
+DATASET_PATH_TRAIN = 'Datasets/USZ_BrainArtery/train/'
+DATASET_PATH_TEST = 'Datasets/USZ_BrainArtery/test/'
+DATASET_TYPE = 'hdf5'
+VESSEL_LABEL = 1
 IN_CHANNELS = 1
 NUM_CLASSES = 1
 BOTTLENECK_CHANNEL = 64
 BACKGROUND_AS_CLASS = True
-
+SHUFFLE_SEED = 42
 
 """""
 U-Net training configurations:
@@ -28,22 +29,21 @@ U-Net training configurations:
     :param TRAIN_CUDA -> if True, moves the model and inference onto GPU
     :param BCE_WEIGHTS -> the class weights for the Binary Cross Entropy loss
 """""
-TRAIN_VAL_TEST_SPLIT = [0.6, 0.2, 0.2]
-SPLIT_SEED = 42
 KFOLD = 5
-CROP_RATIO = [0.1, 0.9]
+CROP_RATIO = [0.0, 1.0]
 TRAIN_CROP_SAMPLES = 2
 PATCH_SIZE_X = 64
 PATCH_SIZE_Y = 64
 PATCH_SIZE_Z = 64
-TRAINING_EPOCH = 200
+TRAINING_EPOCH = 500
 TRAIN_BATCH_SIZE = 1
 VAL_BATCH_SIZE = 1
 TEST_BATCH_SIZE = 1
 BCE_WEIGHTS = [0.04, 0.96]
 TRAIN_CUDA = True
 WEIGHT_DECAY_UNET = 1e-5
-ALPHA = 0.8
+ALPHA_WEIGHT = 1.0
+PATIENCE = 100
 
 """""
 GAT training configurations:
@@ -53,6 +53,8 @@ GAT training configurations:
     :param NUM_ATTEN_HEADS -> number of head attentions
     :param WEIGHT_DECAY -> weight decay (L2 loss on parameters)
 """""
+GCCM = True
+FEATURE_SAMPLING = 'avg' #'max'
 EDGE_DIST_THRESH = 10
 WINDOW_SIZE = 8
 DROPOUT = 0.5
@@ -60,4 +62,4 @@ ALPHA = 0.2
 HIDDEN = 8
 NUM_ATTEN_HEADS = 8
 WEIGHT_DECAY_GAT = 5e-4
-BETA = 0.2
+BETA_WEIGHT = 0.2

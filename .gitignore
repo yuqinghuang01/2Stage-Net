@@ -22,8 +22,9 @@ dist/
 data/
 Datasets/
 
-# Graph visualizations
+# Visualizations
 graphs/
+test_stl/
 
 # Checkpoints
 #checkpoints/

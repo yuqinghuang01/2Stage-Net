@@ -5,6 +5,8 @@ import networkx as nx
 import matplotlib.pyplot as plt
 import skfmm
 from tqdm import tqdm
+from skimage.measure import marching_cubes
+from stl import mesh
 
 from config import (
     PATCH_SIZE_X, PATCH_SIZE_Y, PATCH_SIZE_Z, EDGE_DIST_THRESH, WINDOW_SIZE
@@ -55,7 +57,7 @@ def load_data(path="./data/cora/", dataset="cora"):
     return adj, features, labels, idx_train, idx_val, idx_test
 
 
-def build_graph(vesselness):
+def build_graph(vesselness, method):
     '''
     Build graph from ground truth vessel probabilities
     Vertex sampling: Input image partitioned into non-overlapping regions (patches),
@@ -63,9 +65,11 @@ def build_graph(vesselness):
     Edge construction: An undirected edge is assigned between a vertex pair 
                        if their geodesic distance is amller than a threshold d
     Vertex features: feature extracted from the last layer of U-Net before output
+    Method: graph node sampling method, can be 'max' or 'avg'
     '''
     #find local maxima
     feature_mask = np.zeros(vesselness.shape)
+    vesselness = vesselness.astype(np.bool)
     labels = []
     max_pos = []
     x_quan = range(0, vesselness.shape[0], WINDOW_SIZE)
@@ -78,15 +82,24 @@ def build_graph(vesselness):
                 if np.sum(cur_win) == 0:
                     pos = (int(x_idx+WINDOW_SIZE/2), int(y_idx+WINDOW_SIZE/2), int(z_idx+WINDOW_SIZE/2))
                     feature_mask[pos] = 1
+                    assert vesselness[pos] == 0
                     labels.append(vesselness[pos])
                     max_pos.append(pos)
-                else:
+                elif method == 'max':
                     #print(np.max(cur_win))
+                    #node sampling: randomly choose from largest probability pixel, feature extracted according to the position of the node
                     temp = np.unravel_index(cur_win.argmax(), cur_win.shape)
                     pos = (int(x_idx+temp[0]), int(y_idx+temp[0]), int(z_idx+temp[0]))
                     feature_mask[pos] = 1
                     labels.append(vesselness[pos])
                     max_pos.append(pos)
+                elif method == 'avg':
+                    #node sampling: average position of voxels belonging to vessels is sampled as a node
+                    indices = np.indices(cur_win.shape)
+                    pos = (int(x_idx+np.mean(indices[0][cur_win])), int(y_idx+np.mean(indices[1][cur_win])), int(z_idx+np.mean(indices[2][cur_win])))
+                    labels.append(1)
+                    max_pos.append(pos)
+                    feature_mask[x_idx:x_idx+WINDOW_SIZE, y_idx:y_idx+WINDOW_SIZE, z_idx:z_idx+WINDOW_SIZE] = cur_win
         
     #construct graph
     graph = nx.Graph()
@@ -101,6 +114,7 @@ def build_graph(vesselness):
     #add edges 
     node_list = list(graph.nodes)
     edges = np.zeros((0, 2))
+    edges_weight = np.zeros((0))
     for i, n in enumerate(node_list):
         if vesselness[graph.nodes[n]['x'], graph.nodes[n]['y'], graph.nodes[n]['z']] == 0:
             continue
@@ -122,13 +136,14 @@ def build_graph(vesselness):
                 #print(geo_dist)
                 graph.add_edge(n, n_comp, weight=EDGE_DIST_THRESH/(EDGE_DIST_THRESH+geo_dist))
                 edges = np.append(edges, np.array([[n, n_comp]]), axis=0)
+                edges_weight = np.append(edges_weight, np.array([EDGE_DIST_THRESH/(EDGE_DIST_THRESH+geo_dist)]), axis=0)
                 #print('An edge between', 'node', n, '&', n_comp, 'is constructed')
     
     labels = np.array(labels)
     labels = encode_onehot(labels)
     labels = torch.LongTensor(np.where(labels)[1])
 
-    adj = sp.coo_matrix((np.ones(edges.shape[0]), (edges[:,0], edges[:,1])), shape=(labels.shape[0], labels.shape[0]), dtype=np.float32)
+    adj = sp.coo_matrix((edges_weight, (edges[:,0], edges[:,1])), shape=(labels.shape[0], labels.shape[0]), dtype=np.float32)
     adj = adj + adj.T.multiply(adj.T > adj) - adj.multiply(adj.T > adj) #build symmetric adjacency matrix
     adj = normalize_adj(adj + sp.eye(adj.shape[0]))
     adj = torch.FloatTensor(np.array(adj.todense()))
@@ -164,3 +179,15 @@ def accuracy(output, labels):
     correct = correct.sum()
     return correct / len(labels)
 
+
+def np_to_stl(pred3d, save_path):
+    vertices, faces, normals, values = marching_cubes(pred3d, allow_degenerate=False)
+    
+    # Create the mesh
+    mymesh = mesh.Mesh(np.zeros(faces.shape[0], dtype=mesh.Mesh.dtype))
+    for i, f in enumerate(faces):
+        for j in range(3):
+            mymesh.vectors[i][j] = vertices[f[j],:]
+
+    # Write the mesh to file "cube.stl"
+    mymesh.save(save_path)

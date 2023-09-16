@@ -6,13 +6,14 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import Variable
 from config import (
-    TRAINING_EPOCH, NUM_CLASSES, IN_CHANNELS, BOTTLENECK_CHANNEL, BACKGROUND_AS_CLASS, TRAIN_CUDA,
-    VAL_BATCH_SIZE, PATCH_SIZE_X, PATCH_SIZE_Y, PATCH_SIZE_Z, BCE_WEIGHTS,
-    DROPOUT, ALPHA, HIDDEN, NUM_ATTEN_HEADS, WEIGHT_DECAY_UNET, WEIGHT_DECAY_GAT, ALPHA, BETA
+    TRAINING_EPOCH, NUM_CLASSES, IN_CHANNELS, BOTTLENECK_CHANNEL, BACKGROUND_AS_CLASS, TRAIN_CUDA, TRAIN_BATCH_SIZE, KFOLD,
+    VAL_BATCH_SIZE, PATCH_SIZE_X, PATCH_SIZE_Y, PATCH_SIZE_Z, BCE_WEIGHTS, WINDOW_SIZE, PATIENCE, GCCM,
+    FEATURE_SAMPLING, DROPOUT, ALPHA, HIDDEN, NUM_ATTEN_HEADS, WEIGHT_DECAY_UNET, WEIGHT_DECAY_GAT, ALPHA_WEIGHT, BETA_WEIGHT
 )
 from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
 from torchmetrics.functional import dice
-from torchmetrics import Precision, Recall, AUROC
+from torchmetrics import Precision, Recall, AUROC, Accuracy, Specificity
+from monai.metrics import compute_hausdorff_distance
 from dataset import get_train_val_test_Dataloaders
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
@@ -21,6 +22,7 @@ from transforms import (train_transform, train_transform_cuda,
                         val_transform, val_transform_cuda)
 from utils import build_graph, accuracy
 from models.gat import GAT
+from torch.utils.data import Dataset, DataLoader
 
 if BACKGROUND_AS_CLASS: NUM_CLASSES += 1
 
@@ -28,7 +30,7 @@ NUM_FEATURES = int(BOTTLENECK_CHANNEL/8)
 
 writer = SummaryWriter("logs")
 
-unet = UNet3D(in_channels=IN_CHANNELS , 
+unet = UNet3D(in_channels=IN_CHANNELS, 
               num_classes=NUM_CLASSES, 
               level_channels=[int(BOTTLENECK_CHANNEL/8), int(BOTTLENECK_CHANNEL/4), int(BOTTLENECK_CHANNEL/2)], bottleneck_channel=BOTTLENECK_CHANNEL)
 gat = GAT(nfeat=NUM_FEATURES, 
@@ -53,124 +55,174 @@ elif not torch.cuda.is_available() and TRAIN_CUDA:
     print('cuda not available! Training initialized on cpu ...')
 
 
-train_dataloader, val_dataloader, _ = get_train_val_test_Dataloaders(train_transforms=train_transforms, val_transforms=val_transforms, test_transforms= val_transforms)
-
-
-optimizer_unet = Adam(params=unet.parameters(), weight_decay=WEIGHT_DECAY_UNAT)
+optimizer_unet = Adam(params=unet.parameters(), weight_decay=WEIGHT_DECAY_UNET)
 optimizer_gat = Adam(params=gat.parameters(), weight_decay=WEIGHT_DECAY_GAT)
 
-min_valid_loss = math.inf
+precision = Precision(task='multiclass', num_classes=2, ignore_index=0).to(device)
+acc = Accuracy(task='multiclass', num_classes=2, ignore_index=0).to(device)
+specificity = Specificity(task='multiclass', num_classes=2, ignore_index=0).to(device)
+recall = Recall(task='multiclass', num_classes=2, ignore_index=0).to(device)
 
-for epoch in range(TRAINING_EPOCH):
+for fold in range(KFOLD):
+    print(f"Fold {fold}")
+    print("----------------------")
+
+    train_dataloader, val_dataloader, _ = get_train_val_test_Dataloaders(train_transforms=train_transforms, val_transforms=val_transforms, test_transforms= val_transforms, training_fold=fold)
+
+    for epoch in range(TRAINING_EPOCH):
     
-    train_loss = 0.0
-    train_metric = 0.0
-    unet.train()
-    for crops in train_dataloader:
-        crops_loss = 0.0
-        metric = 0.0
-        for data in crops:
-            img, gt = data['image'], data['label']
-            gt = torch.squeeze(gt, dim=1).long()
-        
-            optimizer_unet.zero_grad()
+        train_loss = 0.0
+        train_loss_gat = 0.0
+        train_loss_unet = 0.0
+        train_metric = 0.0
+        unet.train()
+        for crops in train_dataloader:
+            crops_loss = 0.0
+            crops_loss_gat = 0.0
+            crops_loss_unet = 0.0
+            metric = 0.0
+            for data in crops:
+                img, gt = data['image'], data['label']
+                gt = torch.squeeze(gt, dim=1).long()
 
-            output, features = unet(img) #model returns last layer features so we can insert GCCM plug-in here (based on GAT)
-            #print(output.size()) #[1, C, 64, 64, 64]
-            #print(gt.size()) #[1, 64, 64, 64]
+                optimizer_unet.zero_grad()
 
-            #construct graph from gt, sample cnn features as node features
-            vesselness = gt.squeeze(0).detach().cpu().numpy().astype(np.double)
-            adj, feature_mask, labels, idx_train = build_graph(vesselness)
+                output, features = unet(img) #model returns last layer features so we can insert GCCM plug-in here (based on GAT)
+                output = torch.softmax(output, dim=1)
+                #print(output.size()) #[1, C, 64, 64, 64]
+                #print(gt.size()) #[1, 64, 64, 64]
 
-            #apply feature mask to feature
-            features = torch.moveaxis(features, 1, -1).squeeze(0) #print(features.size()) #[64, 64, 64, 8]
-            features = F.normalize(features, dim=3)
-            feature_mask = torch.from_numpy(feature_mask).bool().to(device)
-            features = features[feature_mask,:]
-            #print(features.size()) #[512, 8]
+                loss_gat = 0.0
+                if GCCM:
+                    #construct graph from gt, sample cnn features as node features
+                    vesselness = gt.squeeze(0).detach().cpu().numpy().astype(np.double)
+                    adj, feature_mask, labels, idx_train = build_graph(vesselness, FEATURE_SAMPLING)
 
-            if device == 'cuda':
-                adj = adj.cuda()
-                labels = labels.cuda()
-                idx_train = idx_train.cuda()
+                    #apply feature mask to feature
+                    if FEATURE_SAMPLING == 'avg':
+                        features = torch.moveaxis(features, 1, -1).squeeze(0) #print(features.size()) #[64, 64, 64, 8]
+                        feature_mask = torch.from_numpy(feature_mask).to(device).unsqueeze(-1)
+                        pool = torch.nn.AvgPool3d(WINDOW_SIZE)
+                        features = torch.moveaxis(features * feature_mask, -1, 0)
+                        features = pool(features)
+                        features = torch.moveaxis(features, 0, -1)
+                        features = F.normalize(features, dim=3)
+                        features = torch.flatten(features, 0, 2).float()
+                        #print(features.size()) #[512, 8]
+                    else:
+                        features = torch.moveaxis(features, 1, -1).squeeze(0) #print(features.size()) #[64, 64, 64, 8]
+                        features = F.normalize(features, dim=3)
+                        feature_mask = torch.from_numpy(feature_mask).bool().to(device)
+                        features = features[feature_mask,:]
+
+                    if device == 'cuda':
+                        adj = adj.cuda()
+                        labels = labels.cuda()
+                        idx_train = idx_train.cuda()
             
-            #feed graph to GAT network
-            gat.train()
-            optimizer_gat.zero_grad()
-            output_gat = gat(features, adj)
-            loss_train = F.nll_loss(output_gat[idx_train], labels[idx_train])
-            acc_train = accuracy(output_gat[idx_train], labels[idx_train])
+                    #feed graph to GAT network
+                    gat.train()
+                    optimizer_gat.zero_grad()
+                    output_gat = gat(features, adj)
+                    loss_gat = F.nll_loss(output_gat[idx_train], labels[idx_train])
+                    acc_gat = accuracy(output_gat[idx_train], labels[idx_train])
+                    #print('GAT:',
+                    #     'loss_train: {:.4f}'.format(loss_gat.data.item()),
+                    #     'acc_train: {:.4f}'.format(acc_gat.data.item()))
 
-            print('GAT:',
-                  'loss_train: {:.4f}'.format(loss_train.data.item()),
-                  'acc_train: {:.4f}'.format(acc_train.data.item()))
+                #sum up unet loss and connectivity constraints loss
+                loss_unet = criterion(output, gt)
+                #print(loss_unet)
+                loss = BETA_WEIGHT * loss_gat + ALPHA_WEIGHT * loss_unet
+                crops_loss += loss.item()
+                crops_loss_gat += loss_gat.item()
+                crops_loss_unet += loss_unet.item()
 
-            #sum up unet loss and connectivity constraints loss
-            loss = BETA * loss_train + ALPHA * criterion(output, gt)
-            crops_loss += loss.item()
+                metric += dice(output, gt, ignore_index=0)
+                loss.backward()
 
-            output = torch.softmax(output, dim=1)
-            metric += dice(output, gt, ignore_index=0)
-            print(metric)
-            loss.backward()
+                #print(unet.s_block1.conv2.weight.grad)
+                #for param in gat.parameters():
+                #    print(param.grad)
 
-            #print(unet.s_block1.conv2.weight.grad)
-            #for param in gat.parameters():
-            #    print(param.grad)
+                optimizer_gat.step()
+                optimizer_unet.step()
 
-            optimizer_gat.step()
-            optimizer_unet.step()
-
-        train_loss += crops_loss / len(crops)
-        train_metric += metric.item() / len(crops)
+            train_loss += crops_loss / len(crops)
+            train_loss_gat += crops_loss_gat / len(crops)
+            train_loss_unet += crops_loss_unet / len(crops)
+            train_metric += metric.item() / len(crops)
         
-    #validation starts
-    valid_loss = 0.0
-    valid_metric = 0.0
-    unet.eval() #switch on evaluation mode
-    with torch.no_grad():
-        for data in val_dataloader:
-            img, gt = data['image'], data['label']
+        #validation starts
+        min_valid_loss = math.inf
+        valid_loss = 0.0
+        valid_dice = 0.0 # 2TP/(2TP+FN+FP)
+        valid_acc = 0.0 # (TP+TN)/(TP+TN+FP+FN)
+        valid_recall = 0.0 # TP/(TP+FN), also called sensitivity
+        valid_pre = 0.0 # TP/(TP+FP)
+        valid_spe = 0.0 # TN/(TN+FP)
+        valid_hausdorff_dist = 0.0 #deviation between predicted mask and gt
+        count_no_improve = 0
+        unet.eval() #switch on evaluation mode
+        with torch.no_grad():
+            for data in val_dataloader:
+                img, gt = data['image'], data['label']
 
-            patch_subject = tio.Subject(data=tio.ScalarImage(tensor=img.squeeze(0)), target=tio.LabelMap(tensor=gt.squeeze(0)))
-            grid_sampler = tio.inference.GridSampler(subject=patch_subject, patch_size=(PATCH_SIZE_X, PATCH_SIZE_Y, PATCH_SIZE_Z), patch_overlap=0)
-            aggregator = tio.inference.GridAggregator(grid_sampler, overlap_mode='crop')
-            patch_loader = torch.utils.data.DataLoader(grid_sampler, batch_size=VAL_BATCH_SIZE)
-            patch_loss = 0.0
-            gt = torch.squeeze(gt, dim=1).long()
+                patch_subject = tio.Subject(data=tio.ScalarImage(tensor=img.squeeze(0)), target=tio.LabelMap(tensor=gt.squeeze(0)))
+                grid_sampler = tio.inference.GridSampler(subject=patch_subject, patch_size=(PATCH_SIZE_X, PATCH_SIZE_Y, PATCH_SIZE_Z), patch_overlap=0)
+                aggregator = tio.inference.GridAggregator(grid_sampler, overlap_mode='crop')
+                patch_loader = torch.utils.data.DataLoader(grid_sampler, batch_size=VAL_BATCH_SIZE)
+                patch_loss = 0.0
+                gt = torch.squeeze(gt, dim=1).long()
 
-            for patches_batch in patch_loader:
-                data_patch = patches_batch['data'][tio.DATA].to(device)
-                locations_patch = patches_batch[tio.LOCATION]
-                #print(data_patch.size()) [1, 1, 64, 64, 64]
-                patch_output, features = unet(data_patch)
-                #print(patch_output.size()) [1, C, 64, 64, 64]
-                patch_gt = torch.squeeze(patches_batch['target'][tio.DATA].to(device), dim=1).long()
-                patch_loss += criterion(patch_output, patch_gt)
-                patch_output = torch.softmax(patch_output, dim=1)
-                aggregator.add_batch(patch_output, locations_patch)
+                for patches_batch in patch_loader:
+                    data_patch = patches_batch['data'][tio.DATA].to(device)
+                    locations_patch = patches_batch[tio.LOCATION]
+                    #print(data_patch.size()) [1, 1, 64, 64, 64]
+                    patch_output, features = unet(data_patch)
+                    #print(patch_output.size()) [1, C, 64, 64, 64]
+                    patch_gt = torch.squeeze(patches_batch['target'][tio.DATA].to(device), dim=1).long()
+                    patch_loss += criterion(patch_output, patch_gt)
+                    patch_output = torch.softmax(patch_output, dim=1)
+                    aggregator.add_batch(patch_output, locations_patch)
         
-            output = aggregator.get_output_tensor().unsqueeze(0).to(device)
-            patch_loss = patch_loss / len(patch_loader)
-            valid_loss += patch_loss.item()
-            print(output.size())
-            #print(gt.size())
-            valid_metric += dice(output, gt, ignore_index=0)
+                output = aggregator.get_output_tensor().unsqueeze(0).to(device)
+                patch_loss = patch_loss / len(patch_loader)
+                valid_loss += patch_loss.item()
+                valid_dice += dice(output, gt, ignore_index=0)
+                valid_pre += precision(output, gt)
+                valid_acc += acc(output, gt)
+                valid_spe += specificity(output, gt)
+                valid_recall += recall(output, gt) #sensitivity
+                gt = gt.unsqueeze(1)
+                output = torch.where(output > 0.5, 1, 0)
+                valid_hausdorff_dist += compute_hausdorff_distance(output, gt, percentile=95)
         
-    writer.add_scalar("Loss/Train", train_loss / len(train_dataloader), epoch)
-    writer.add_scalar("Loss/Validation", valid_loss / len(val_dataloader), epoch)
-    writer.add_scalar("Metric/Train", train_metric / len(train_dataloader), epoch)
-    writer.add_scalar("Metric/Validation", valid_metric / len(val_dataloader), epoch)
+        writer.add_scalar('runs_split{}'.format(fold), {'Loss/Train': train_loss / len(train_dataloader), 
+                                                        'Loss/Validation': valid_loss / len(val_dataloader),
+                                                        'Loss/TrainUNet': train_loss_unet / len(train_dataloader), 
+                                                        'Loss/TrainGAT': train_loss_gat / len(train_dataloader)}, epoch)
+        writer.add_scalar('runs_split{}'.format(fold), {'Metric/TrainDice': train_metric / len(train_dataloader), 
+                                                        'Metric/ValidationDice': valid_dice / len(val_dataloader),
+                                                        'Metric/ValidationPrecision': valid_pre / len(val_dataloader),
+                                                        'Metric/ValidationAccuracy': valid_acc / len(val_dataloader),
+                                                        'Metric/ValidationSpecificity': valid_spe / len(val_dataloader),
+                                                        'Metric/ValidationRecall': valid_recall / len(val_dataloader),
+                                                        'Metric/ValidationHausdorff': valid_hausdorff_dist / len(val_dataloader)}, epoch)
     
-    print(f'Epoch {epoch+1} \t\t Training Loss: {train_loss / len(train_dataloader)} \t\t Validation Loss: {valid_loss / len(val_dataloader)}')
-    print(f'Epoch {epoch+1} \t\t Training Metric: {train_metric / len(train_dataloader)} \t\t Validation Metric: {valid_metric / len(val_dataloader)}')
+        print(f'Epoch {epoch+1} \t\t Training Loss: {train_loss / len(train_dataloader)} \t\t Validation Loss: {valid_loss / len(val_dataloader)}')
+        print(f'Epoch {epoch+1} \t\t Training Metric: {train_metric / len(train_dataloader)} \t\t Validation Metric: {valid_dice / len(val_dataloader)}')
 
-    if min_valid_loss > valid_loss:
-        print(f'Validation Loss Decreased({min_valid_loss:.6f}--->{valid_loss:.6f}) \t Saving The Model')
-        min_valid_loss = valid_loss
-        # Saving State Dict
-        torch.save(unet.state_dict(), f'checkpoints/best_model.pth')
+        if min_valid_loss > valid_loss:
+            print(f'Validation Loss Decreased({min_valid_loss:.6f}--->{valid_loss:.6f}) \t Saving The Model')
+            min_valid_loss = valid_loss
+            # Saving State Dict
+            torch.save(unet.state_dict(), f'checkpoints/best_model_fold{fold}.pth')
+        else:
+            count_no_improve += 1
+        
+        if count_no_improve > PATIENCE: break
+
 
 writer.flush()
 writer.close()
