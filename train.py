@@ -1,12 +1,12 @@
 import math
+import os
 import numpy as np
 import torch
 import torchio as tio
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.autograd import Variable
 from config import (
-    TRAINING_EPOCH, NUM_CLASSES, IN_CHANNELS, BOTTLENECK_CHANNEL, BACKGROUND_AS_CLASS, TRAIN_CUDA, TRAIN_BATCH_SIZE, KFOLD,
+    TRAINING_EPOCH, NUM_CLASSES, IN_CHANNELS, BOTTLENECK_CHANNEL, BACKGROUND_AS_CLASS, TRAIN_CUDA, TRAIN_BATCH_SIZE, KFOLD, LOG_DIR, MODEL_NAME,
     VAL_BATCH_SIZE, PATCH_SIZE_X, PATCH_SIZE_Y, PATCH_SIZE_Z, BCE_WEIGHTS, WINDOW_SIZE, PATIENCE, GCCM,
     FEATURE_SAMPLING, DROPOUT, ALPHA, HIDDEN, NUM_ATTEN_HEADS, WEIGHT_DECAY_UNET, WEIGHT_DECAY_GAT, ALPHA_WEIGHT, BETA_WEIGHT
 )
@@ -22,48 +22,50 @@ from transforms import (train_transform, train_transform_cuda,
                         val_transform, val_transform_cuda)
 from utils import build_graph, accuracy
 from models.gat import GAT
-from torch.utils.data import Dataset, DataLoader
 
 if BACKGROUND_AS_CLASS: NUM_CLASSES += 1
 
 NUM_FEATURES = int(BOTTLENECK_CHANNEL/8)
 
-writer = SummaryWriter("logs")
-
-unet = UNet3D(in_channels=IN_CHANNELS, 
-              num_classes=NUM_CLASSES, 
-              level_channels=[int(BOTTLENECK_CHANNEL/8), int(BOTTLENECK_CHANNEL/4), int(BOTTLENECK_CHANNEL/2)], bottleneck_channel=BOTTLENECK_CHANNEL)
-gat = GAT(nfeat=NUM_FEATURES, 
-          nhid=HIDDEN, 
-          nclass=NUM_CLASSES, 
-          dropout=DROPOUT, 
-          nheads=NUM_ATTEN_HEADS, 
-          alpha=ALPHA)
 train_transforms = train_transform
 val_transforms = val_transform
 criterion = CrossEntropyLoss(weight=torch.Tensor(BCE_WEIGHTS))
 device = 'cpu'
 
-if torch.cuda.is_available() and TRAIN_CUDA:
-    unet = unet.cuda()
-    gat = gat.cuda()
-    train_transforms = train_transform_cuda
-    val_transforms = val_transform_cuda
-    criterion = CrossEntropyLoss(weight=torch.Tensor(BCE_WEIGHTS).to(device='cuda'))
-    device = 'cuda'
-elif not torch.cuda.is_available() and TRAIN_CUDA:
-    print('cuda not available! Training initialized on cpu ...')
-
-
-optimizer_unet = Adam(params=unet.parameters(), weight_decay=WEIGHT_DECAY_UNET)
-optimizer_gat = Adam(params=gat.parameters(), weight_decay=WEIGHT_DECAY_GAT)
-
-precision = Precision(task='multiclass', num_classes=2, ignore_index=0).to(device)
-acc = Accuracy(task='multiclass', num_classes=2, ignore_index=0).to(device)
-specificity = Specificity(task='multiclass', num_classes=2, ignore_index=0).to(device)
-recall = Recall(task='multiclass', num_classes=2, ignore_index=0).to(device)
-
 for fold in range(KFOLD):
+
+    count_no_improve = 0
+
+    unet = UNet3D(in_channels=IN_CHANNELS, 
+              num_classes=NUM_CLASSES, 
+              level_channels=[int(BOTTLENECK_CHANNEL/8), int(BOTTLENECK_CHANNEL/4), int(BOTTLENECK_CHANNEL/2)], bottleneck_channel=BOTTLENECK_CHANNEL)
+    gat = GAT(nfeat=NUM_FEATURES, 
+          nhid=HIDDEN, 
+          nclass=NUM_CLASSES, 
+          dropout=DROPOUT, 
+          nheads=NUM_ATTEN_HEADS, 
+          alpha=ALPHA)
+
+    if torch.cuda.is_available() and TRAIN_CUDA:
+        unet = unet.cuda()
+        gat = gat.cuda()
+        train_transforms = train_transform_cuda
+        val_transforms = val_transform_cuda
+        criterion = CrossEntropyLoss(weight=torch.Tensor(BCE_WEIGHTS).to(device='cuda'))
+        device = 'cuda'
+    elif not torch.cuda.is_available() and TRAIN_CUDA:
+        print('cuda not available! Training initialized on cpu ...')
+
+
+    optimizer_unet = Adam(params=unet.parameters(), weight_decay=WEIGHT_DECAY_UNET)
+    optimizer_gat = Adam(params=gat.parameters(), weight_decay=WEIGHT_DECAY_GAT)
+
+    precision = Precision(task='binary').to(device)
+    acc = Accuracy(task='binary').to(device)
+    specificity = Specificity(task='binary').to(device)
+    recall = Recall(task='binary').to(device)
+
+    writer = SummaryWriter(os.path.join(LOG_DIR, f"runs_split{fold+1}"))
     print(f"Fold {fold}")
     print("----------------------")
 
@@ -95,7 +97,7 @@ for fold in range(KFOLD):
                 loss_gat = 0.0
                 if GCCM:
                     #construct graph from gt, sample cnn features as node features
-                    vesselness = gt.squeeze(0).detach().cpu().numpy().astype(np.double)
+                    vesselness = gt.squeeze(0).cpu().detach().numpy()
                     adj, feature_mask, labels, idx_train = build_graph(vesselness, FEATURE_SAMPLING)
 
                     #apply feature mask to feature
@@ -125,21 +127,25 @@ for fold in range(KFOLD):
                     optimizer_gat.zero_grad()
                     output_gat = gat(features, adj)
                     loss_gat = F.nll_loss(output_gat[idx_train], labels[idx_train])
+                    crops_loss_gat += loss_gat.item()
                     acc_gat = accuracy(output_gat[idx_train], labels[idx_train])
-                    #print('GAT:',
-                    #     'loss_train: {:.4f}'.format(loss_gat.data.item()),
-                    #     'acc_train: {:.4f}'.format(acc_gat.data.item()))
+                    print('GAT:',
+                        'loss_train: {:.4f}'.format(loss_gat.data.item()),
+                        'acc_train: {:.4f}'.format(acc_gat.data.item()))
 
                 #sum up unet loss and connectivity constraints loss
                 loss_unet = criterion(output, gt)
-                #print(loss_unet)
-                loss = BETA_WEIGHT * loss_gat + ALPHA_WEIGHT * loss_unet
-                crops_loss += loss.item()
-                crops_loss_gat += loss_gat.item()
-                crops_loss_unet += loss_unet.item()
-
+                print(loss_unet)
                 metric += dice(output, gt, ignore_index=0)
-                loss.backward()
+
+                if GCCM:
+                    loss = BETA_WEIGHT * loss_gat + ALPHA_WEIGHT * loss_unet
+                    crops_loss += loss.item()
+                    crops_loss_unet += loss_unet.item()
+                    loss.backward()
+                else:
+                    loss_unet.backward()
+                    crops_loss_unet += loss_unet.item()
 
                 #print(unet.s_block1.conv2.weight.grad)
                 #for param in gat.parameters():
@@ -162,7 +168,6 @@ for fold in range(KFOLD):
         valid_pre = 0.0 # TP/(TP+FP)
         valid_spe = 0.0 # TN/(TN+FP)
         valid_hausdorff_dist = 0.0 #deviation between predicted mask and gt
-        count_no_improve = 0
         unet.eval() #switch on evaluation mode
         with torch.no_grad():
             for data in val_dataloader:
@@ -186,7 +191,7 @@ for fold in range(KFOLD):
                     patch_output = torch.softmax(patch_output, dim=1)
                     aggregator.add_batch(patch_output, locations_patch)
         
-                output = aggregator.get_output_tensor().unsqueeze(0).to(device)
+                output = aggregator.get_output_tensor()[1].unsqueeze(0).to(device)
                 patch_loss = patch_loss / len(patch_loader)
                 valid_loss += patch_loss.item()
                 valid_dice += dice(output, gt, ignore_index=0)
@@ -195,20 +200,21 @@ for fold in range(KFOLD):
                 valid_spe += specificity(output, gt)
                 valid_recall += recall(output, gt) #sensitivity
                 gt = gt.unsqueeze(1)
-                output = torch.where(output > 0.5, 1, 0)
+                output = torch.where(output > 0.5, 1, 0).unsqueeze(1)
                 valid_hausdorff_dist += compute_hausdorff_distance(output, gt, percentile=95)
         
-        writer.add_scalar('runs_split{}'.format(fold), {'Loss/Train': train_loss / len(train_dataloader), 
-                                                        'Loss/Validation': valid_loss / len(val_dataloader),
-                                                        'Loss/TrainUNet': train_loss_unet / len(train_dataloader), 
-                                                        'Loss/TrainGAT': train_loss_gat / len(train_dataloader)}, epoch)
-        writer.add_scalar('runs_split{}'.format(fold), {'Metric/TrainDice': train_metric / len(train_dataloader), 
-                                                        'Metric/ValidationDice': valid_dice / len(val_dataloader),
-                                                        'Metric/ValidationPrecision': valid_pre / len(val_dataloader),
-                                                        'Metric/ValidationAccuracy': valid_acc / len(val_dataloader),
-                                                        'Metric/ValidationSpecificity': valid_spe / len(val_dataloader),
-                                                        'Metric/ValidationRecall': valid_recall / len(val_dataloader),
-                                                        'Metric/ValidationHausdorff': valid_hausdorff_dist / len(val_dataloader)}, epoch)
+        writer.add_scalar('loss/train', train_loss / len(train_dataloader), epoch+1)
+        writer.add_scalar('loss/val', valid_loss / len(val_dataloader), epoch+1)
+        writer.add_scalar('loss/train_unet', train_loss_unet / len(train_dataloader), epoch+1)
+        writer.add_scalar('loss/train_gat', train_loss_gat / len(train_dataloader), epoch+1)
+
+        writer.add_scalar('metric/train_dice', train_metric / len(train_dataloader), epoch+1)
+        writer.add_scalar('metric/val_dice', valid_dice / len(val_dataloader), epoch+1)
+        writer.add_scalar('metric/val_precision', valid_pre / len(val_dataloader), epoch+1)
+        writer.add_scalar('metric/val_accuracy', valid_acc / len(val_dataloader), epoch+1)
+        writer.add_scalar('metric/val_specificity', valid_spe / len(val_dataloader), epoch+1)
+        writer.add_scalar('metric/val_recall', valid_recall / len(val_dataloader), epoch+1)
+        writer.add_scalar('metric/val_hausdorff', valid_hausdorff_dist / len(val_dataloader), epoch+1)
     
         print(f'Epoch {epoch+1} \t\t Training Loss: {train_loss / len(train_dataloader)} \t\t Validation Loss: {valid_loss / len(val_dataloader)}')
         print(f'Epoch {epoch+1} \t\t Training Metric: {train_metric / len(train_dataloader)} \t\t Validation Metric: {valid_dice / len(val_dataloader)}')
@@ -217,12 +223,12 @@ for fold in range(KFOLD):
             print(f'Validation Loss Decreased({min_valid_loss:.6f}--->{valid_loss:.6f}) \t Saving The Model')
             min_valid_loss = valid_loss
             # Saving State Dict
-            torch.save(unet.state_dict(), f'checkpoints/best_model_fold{fold}.pth')
+            torch.save(unet.state_dict(), os.path.join('checkpoints/', MODEL_NAME + f'_fold{fold}.pth'))
         else:
             count_no_improve += 1
         
         if count_no_improve > PATIENCE: break
 
 
-writer.flush()
-writer.close()
+    writer.flush()
+    writer.close()

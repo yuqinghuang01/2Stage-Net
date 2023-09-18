@@ -11,6 +11,8 @@ Dataset configurations:
 """""
 DATASET_PATH_TRAIN = 'Datasets/USZ_BrainArtery/train/'
 DATASET_PATH_TEST = 'Datasets/USZ_BrainArtery/test/'
+LOG_DIR = 'logs_unet'
+MODEL_NAME = 'usz_ica_unet'
 DATASET_TYPE = 'hdf5'
 VESSEL_LABEL = 1
 IN_CHANNELS = 1
@@ -53,8 +55,8 @@ GAT training configurations:
     :param NUM_ATTEN_HEADS -> number of head attentions
     :param WEIGHT_DECAY -> weight decay (L2 loss on parameters)
 """""
-GCCM = True
-FEATURE_SAMPLING = 'avg' #'max'
+GCCM = False
+FEATURE_SAMPLING = 'max' #'avg'
 EDGE_DIST_THRESH = 10
 WINDOW_SIZE = 8
 DROPOUT = 0.5

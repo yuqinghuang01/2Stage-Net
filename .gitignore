@@ -9,6 +9,9 @@ __pycache__/
 
 # Tensorboard logs
 logs/
+logs_ours/
+logs_unet/
+logs_gccm/
 runs/
 
 # PyTorch models
