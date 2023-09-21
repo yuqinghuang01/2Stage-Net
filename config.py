@@ -11,8 +11,8 @@ Dataset configurations:
 """""
 DATASET_PATH_TRAIN = 'Datasets/USZ_BrainArtery/train/'
 DATASET_PATH_TEST = 'Datasets/USZ_BrainArtery/test/'
-LOG_DIR = 'logs_unet'
-MODEL_NAME = 'usz_ica_unet'
+LOG_DIR = 'logs_all_unet'
+MODEL_NAME = 'usz_all_unet'
 DATASET_TYPE = 'hdf5'
 VESSEL_LABEL = 1
 IN_CHANNELS = 1
@@ -31,21 +31,21 @@ U-Net training configurations:
     :param TRAIN_CUDA -> if True, moves the model and inference onto GPU
     :param BCE_WEIGHTS -> the class weights for the Binary Cross Entropy loss
 """""
-KFOLD = 5
+KFOLD = 3
 CROP_RATIO = [0.0, 1.0]
-TRAIN_CROP_SAMPLES = 2
+TRAIN_CROP_SAMPLES = 1
 PATCH_SIZE_X = 64
 PATCH_SIZE_Y = 64
 PATCH_SIZE_Z = 64
-TRAINING_EPOCH = 500
+TRAINING_EPOCH = 100
 TRAIN_BATCH_SIZE = 1
 VAL_BATCH_SIZE = 1
 TEST_BATCH_SIZE = 1
-BCE_WEIGHTS = [0.04, 0.96]
+NLL_WEIGHT = [0.2, 0.8]
 TRAIN_CUDA = True
 WEIGHT_DECAY_UNET = 1e-5
 ALPHA_WEIGHT = 1.0
-PATIENCE = 100
+PATIENCE = 20
 
 """""
 GAT training configurations:

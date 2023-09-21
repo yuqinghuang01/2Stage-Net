@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from config import (
     TRAINING_EPOCH, NUM_CLASSES, IN_CHANNELS, BOTTLENECK_CHANNEL, BACKGROUND_AS_CLASS, TRAIN_CUDA, TRAIN_BATCH_SIZE, KFOLD, LOG_DIR, MODEL_NAME,
-    VAL_BATCH_SIZE, PATCH_SIZE_X, PATCH_SIZE_Y, PATCH_SIZE_Z, BCE_WEIGHTS, WINDOW_SIZE, PATIENCE, GCCM,
+    VAL_BATCH_SIZE, PATCH_SIZE_X, PATCH_SIZE_Y, PATCH_SIZE_Z, NLL_WEIGHT, WINDOW_SIZE, PATIENCE, GCCM,
     FEATURE_SAMPLING, DROPOUT, ALPHA, HIDDEN, NUM_ATTEN_HEADS, WEIGHT_DECAY_UNET, WEIGHT_DECAY_GAT, ALPHA_WEIGHT, BETA_WEIGHT
 )
 from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
@@ -22,6 +22,7 @@ from transforms import (train_transform, train_transform_cuda,
                         val_transform, val_transform_cuda)
 from utils import build_graph, accuracy
 from models.gat import GAT
+from monai.losses import DiceLoss
 
 if BACKGROUND_AS_CLASS: NUM_CLASSES += 1
 
@@ -29,7 +30,8 @@ NUM_FEATURES = int(BOTTLENECK_CHANNEL/8)
 
 train_transforms = train_transform
 val_transforms = val_transform
-criterion = CrossEntropyLoss(weight=torch.Tensor(BCE_WEIGHTS))
+#criterion = CrossEntropyLoss(weight=torch.Tensor(NLL_WEIGHTS))
+criterion = DiceLoss()
 device = 'cpu'
 
 for fold in range(KFOLD):
@@ -51,7 +53,7 @@ for fold in range(KFOLD):
         gat = gat.cuda()
         train_transforms = train_transform_cuda
         val_transforms = val_transform_cuda
-        criterion = CrossEntropyLoss(weight=torch.Tensor(BCE_WEIGHTS).to(device='cuda'))
+        #criterion = CrossEntropyLoss(weight=torch.Tensor(BCE_WEIGHTS).to(device='cuda'))
         device = 'cuda'
     elif not torch.cuda.is_available() and TRAIN_CUDA:
         print('cuda not available! Training initialized on cpu ...')
@@ -64,9 +66,11 @@ for fold in range(KFOLD):
     acc = Accuracy(task='binary').to(device)
     specificity = Specificity(task='binary').to(device)
     recall = Recall(task='binary').to(device)
+    
+    min_valid_loss = math.inf
 
     writer = SummaryWriter(os.path.join(LOG_DIR, f"runs_split{fold+1}"))
-    print(f"Fold {fold}")
+    print(f"Fold {fold+1}")
     print("----------------------")
 
     train_dataloader, val_dataloader, _ = get_train_val_test_Dataloaders(train_transforms=train_transforms, val_transforms=val_transforms, test_transforms= val_transforms, training_fold=fold)
@@ -107,6 +111,7 @@ for fold in range(KFOLD):
                         pool = torch.nn.AvgPool3d(WINDOW_SIZE)
                         features = torch.moveaxis(features * feature_mask, -1, 0)
                         features = pool(features)
+                        features = features * (WINDOW_SIZE ** 3)
                         features = torch.moveaxis(features, 0, -1)
                         features = F.normalize(features, dim=3)
                         features = torch.flatten(features, 0, 2).float()
@@ -126,17 +131,21 @@ for fold in range(KFOLD):
                     gat.train()
                     optimizer_gat.zero_grad()
                     output_gat = gat(features, adj)
-                    loss_gat = F.nll_loss(output_gat[idx_train], labels[idx_train])
+                    loss_gat = F.nll_loss(output_gat[idx_train], labels[idx_train], weight=torch.Tensor(NLL_WEIGHT).to(device))
                     crops_loss_gat += loss_gat.item()
                     acc_gat = accuracy(output_gat[idx_train], labels[idx_train])
-                    print('GAT:',
-                        'loss_train: {:.4f}'.format(loss_gat.data.item()),
-                        'acc_train: {:.4f}'.format(acc_gat.data.item()))
+                    #print('GAT:',
+                    #    'loss_train: {:.4f}'.format(loss_gat.data.item()),
+                    #    'acc_train: {:.4f}'.format(acc_gat.data.item()))
 
                 #sum up unet loss and connectivity constraints loss
-                loss_unet = criterion(output, gt)
-                print(loss_unet)
+                #loss_unet = criterion(output, gt)
                 metric += dice(output, gt, ignore_index=0)
+                gt = gt.unsqueeze(1)
+                output = output[:,1].unsqueeze(1)
+                loss_unet = criterion(output, gt)
+                #print(metric)
+                #print(loss_unet)
 
                 if GCCM:
                     loss = BETA_WEIGHT * loss_gat + ALPHA_WEIGHT * loss_unet
@@ -160,7 +169,6 @@ for fold in range(KFOLD):
             train_metric += metric.item() / len(crops)
         
         #validation starts
-        min_valid_loss = math.inf
         valid_loss = 0.0
         valid_dice = 0.0 # 2TP/(2TP+FN+FP)
         valid_acc = 0.0 # (TP+TN)/(TP+TN+FP+FN)
@@ -177,7 +185,7 @@ for fold in range(KFOLD):
                 grid_sampler = tio.inference.GridSampler(subject=patch_subject, patch_size=(PATCH_SIZE_X, PATCH_SIZE_Y, PATCH_SIZE_Z), patch_overlap=0)
                 aggregator = tio.inference.GridAggregator(grid_sampler, overlap_mode='crop')
                 patch_loader = torch.utils.data.DataLoader(grid_sampler, batch_size=VAL_BATCH_SIZE)
-                patch_loss = 0.0
+                #patch_loss = 0.0
                 gt = torch.squeeze(gt, dim=1).long()
 
                 for patches_batch in patch_loader:
@@ -186,21 +194,22 @@ for fold in range(KFOLD):
                     #print(data_patch.size()) [1, 1, 64, 64, 64]
                     patch_output, features = unet(data_patch)
                     #print(patch_output.size()) [1, C, 64, 64, 64]
-                    patch_gt = torch.squeeze(patches_batch['target'][tio.DATA].to(device), dim=1).long()
-                    patch_loss += criterion(patch_output, patch_gt)
+                    #patch_gt = torch.squeeze(patches_batch['target'][tio.DATA].to(device), dim=1).long()
+                    #patch_loss += criterion(patch_output, patch_gt)
                     patch_output = torch.softmax(patch_output, dim=1)
                     aggregator.add_batch(patch_output, locations_patch)
         
-                output = aggregator.get_output_tensor()[1].unsqueeze(0).to(device)
-                patch_loss = patch_loss / len(patch_loader)
-                valid_loss += patch_loss.item()
+                output = aggregator.get_output_tensor().unsqueeze(0).to(device)
                 valid_dice += dice(output, gt, ignore_index=0)
+                output = output[:,1]
                 valid_pre += precision(output, gt)
                 valid_acc += acc(output, gt)
                 valid_spe += specificity(output, gt)
                 valid_recall += recall(output, gt) #sensitivity
                 gt = gt.unsqueeze(1)
-                output = torch.where(output > 0.5, 1, 0).unsqueeze(1)
+                output = output.unsqueeze(1)
+                valid_loss += criterion(output, gt)
+                output = torch.where(output > 0.5, 1, 0)
                 valid_hausdorff_dist += compute_hausdorff_distance(output, gt, percentile=95)
         
         writer.add_scalar('loss/train', train_loss / len(train_dataloader), epoch+1)
@@ -223,12 +232,16 @@ for fold in range(KFOLD):
             print(f'Validation Loss Decreased({min_valid_loss:.6f}--->{valid_loss:.6f}) \t Saving The Model')
             min_valid_loss = valid_loss
             # Saving State Dict
-            torch.save(unet.state_dict(), os.path.join('checkpoints/', MODEL_NAME + f'_fold{fold}.pth'))
+            torch.save(unet.state_dict(), os.path.join('checkpoints/', MODEL_NAME + f'_fold{fold+1}.pth'))
+            count_no_improve = 0
         else:
             count_no_improve += 1
         
         if count_no_improve > PATIENCE: break
+        print(count_no_improve)
 
 
     writer.flush()
     writer.close()
+
+print('done----------')

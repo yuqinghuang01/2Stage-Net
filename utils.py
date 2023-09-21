@@ -99,7 +99,7 @@ def build_graph(vesselness, method):
                     pos = (int(x_idx+np.mean(indices[0][cur_win])), int(y_idx+np.mean(indices[1][cur_win])), int(z_idx+np.mean(indices[2][cur_win])))
                     labels.append(1)
                     max_pos.append(pos)
-                    feature_mask[x_idx:x_idx+WINDOW_SIZE, y_idx:y_idx+WINDOW_SIZE, z_idx:z_idx+WINDOW_SIZE] = cur_win
+                    feature_mask[x_idx:x_idx+WINDOW_SIZE, y_idx:y_idx+WINDOW_SIZE, z_idx:z_idx+WINDOW_SIZE] = cur_win / np.sum(cur_win)
         
     #construct graph
     graph = nx.Graph()
@@ -181,7 +181,7 @@ def accuracy(output, labels):
 
 
 def np_to_stl(pred3d, save_path):
-    vertices, faces, normals, values = marching_cubes(pred3d, allow_degenerate=False)
+    vertices, faces, normals, values = marching_cubes(pred3d, mask=pred3d.astype(np.bool))
     
     # Create the mesh
     mymesh = mesh.Mesh(np.zeros(faces.shape[0], dtype=mesh.Mesh.dtype))

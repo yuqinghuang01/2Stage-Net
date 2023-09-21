@@ -82,7 +82,7 @@ class AneurysmSegmentationUSZ(Dataset):
         label_array = np.array(label_object['data'])
         label_array = np.moveaxis(label_array, -1, 0)
         #Modify label array based on task type
-        vessel_mask = (label_array == VESSEL_LABEL)
+        vessel_mask = (label_array != 0)
         label_array = np.zeros_like(label_array)
         label_array[vessel_mask] = 1
         #else use all available labels

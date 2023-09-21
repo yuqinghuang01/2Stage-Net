@@ -1,6 +1,7 @@
 .idea
 .pytest_cache
 .ipynb_checkpoints
+tmp*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -8,10 +9,7 @@ __pycache__/
 *$py.class
 
 # Tensorboard logs
-logs/
-logs_ours/
-logs_unet/
-logs_gccm/
+logs_*/
 runs/
 
 # PyTorch models
