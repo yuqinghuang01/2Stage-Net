@@ -83,3 +83,4 @@ val_transform_cuda = Compose(
         ToTensord(keys=['image', 'label'], device='cuda')
     ]
 )
+

@@ -139,7 +139,6 @@ for fold in range(KFOLD):
                     #    'acc_train: {:.4f}'.format(acc_gat.data.item()))
 
                 #sum up unet loss and connectivity constraints loss
-                #loss_unet = criterion(output, gt)
                 metric += dice(output, gt, ignore_index=0)
                 gt = gt.unsqueeze(1)
                 output = output[:,1].unsqueeze(1)
@@ -147,14 +146,15 @@ for fold in range(KFOLD):
                 #print(metric)
                 #print(loss_unet)
 
+                loss = loss_unet
+                crops_loss_unet += loss_unet.item()
                 if GCCM:
                     loss = BETA_WEIGHT * loss_gat + ALPHA_WEIGHT * loss_unet
                     crops_loss += loss.item()
-                    crops_loss_unet += loss_unet.item()
                     loss.backward()
                 else:
+                    crops_loss += loss.item()
                     loss_unet.backward()
-                    crops_loss_unet += loss_unet.item()
 
                 #print(unet.s_block1.conv2.weight.grad)
                 #for param in gat.parameters():
@@ -198,7 +198,7 @@ for fold in range(KFOLD):
                     #patch_loss += criterion(patch_output, patch_gt)
                     patch_output = torch.softmax(patch_output, dim=1)
                     aggregator.add_batch(patch_output, locations_patch)
-        
+
                 output = aggregator.get_output_tensor().unsqueeze(0).to(device)
                 valid_dice += dice(output, gt, ignore_index=0)
                 output = output[:,1]
@@ -237,7 +237,7 @@ for fold in range(KFOLD):
         else:
             count_no_improve += 1
         
-        if count_no_improve > PATIENCE: break
+        if count_no_improve >= PATIENCE: break
         print(count_no_improve)
 
 

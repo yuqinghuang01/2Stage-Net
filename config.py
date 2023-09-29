@@ -9,11 +9,11 @@ Dataset configurations:
     :param BACKGROUND_AS_CLASS -> if True, the model treats background as a class
 
 """""
-DATASET_PATH_TRAIN = 'Datasets/USZ_BrainArtery/train/'
-DATASET_PATH_TEST = 'Datasets/USZ_BrainArtery/test/'
-LOG_DIR = 'logs_all_unet'
-MODEL_NAME = 'usz_all_unet'
-DATASET_TYPE = 'hdf5'
+DATASET_PATH_TRAIN = 'Datasets/Synthetic/train/'
+DATASET_PATH_TEST = 'Datasets/Synthetic/test/'
+LOG_DIR = 'logs_synthetic_ours'
+MODEL_NAME = 'synthetic_ours'
+DATASET_TYPE = 'nifti' #'hdf5' 'nifti'
 VESSEL_LABEL = 1
 IN_CHANNELS = 1
 NUM_CLASSES = 1
@@ -32,7 +32,7 @@ U-Net training configurations:
     :param BCE_WEIGHTS -> the class weights for the Binary Cross Entropy loss
 """""
 KFOLD = 3
-CROP_RATIO = [0.0, 1.0]
+CROP_RATIO = [0.1, 0.9]
 TRAIN_CROP_SAMPLES = 1
 PATCH_SIZE_X = 64
 PATCH_SIZE_Y = 64
@@ -43,9 +43,9 @@ VAL_BATCH_SIZE = 1
 TEST_BATCH_SIZE = 1
 NLL_WEIGHT = [0.2, 0.8]
 TRAIN_CUDA = True
-WEIGHT_DECAY_UNET = 1e-5
+WEIGHT_DECAY_UNET = 1e-3
 ALPHA_WEIGHT = 1.0
-PATIENCE = 20
+PATIENCE = 10
 
 """""
 GAT training configurations:
@@ -55,13 +55,13 @@ GAT training configurations:
     :param NUM_ATTEN_HEADS -> number of head attentions
     :param WEIGHT_DECAY -> weight decay (L2 loss on parameters)
 """""
-GCCM = False
-FEATURE_SAMPLING = 'max' #'avg'
+GCCM = True
+FEATURE_SAMPLING = 'avg' #'max'
 EDGE_DIST_THRESH = 10
 WINDOW_SIZE = 8
 DROPOUT = 0.5
 ALPHA = 0.2
 HIDDEN = 8
 NUM_ATTEN_HEADS = 8
-WEIGHT_DECAY_GAT = 5e-4
+WEIGHT_DECAY_GAT = 5e-3
 BETA_WEIGHT = 0.2
