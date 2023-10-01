@@ -1,57 +1,27 @@
-# Pytorch implementation of 3D UNet
+# Pytorch implementation of [3D U-Net](https://arxiv.org/pdf/1606.06650v1.pdf) with [GCCM](https://pubmed.ncbi.nlm.nih.gov/34613925/)
 
-This implementation is based on the orginial 3D UNet paper and adapted to be used for MRI or CT image segmentation task   
-> Link to the paper: [https://arxiv.org/pdf/1606.06650v1.pdf](https://arxiv.org/pdf/1606.06650v1.pdf)
+This implementation is an extension of the method proposed in the paper [3D Graph-Connectivity Constrained Network for Hepatic Vessel Segmentation](https://pubmed.ncbi.nlm.nih.gov/34613925/). We provided an implementation of U-Net with GAT-based GCCM. Then we proposed a new feature sampling strategy of integrating GAT with U-Net during the training stage. Experiments of binary brain artery segmentation on a synthetic dataset and an in-house real dataset show that incorporating graph neural networks during the training stage can improve test-time accuracy as well as help with reducing false positives and segmenting thinner vessels. Therefore, the results confirm the potential of combining CNNs with GNNs to improve the accuracy and connectivity of vessel segmentation.
 
 ## Model Architecture
 
-The model architecture follows an encoder-decoder design which requires the input to be divisible by 16 due to its downsampling rate in the analysis path.
+GCCM based on GAT is integrated with U-Net during the training stage to add connectivity constraints. Two feature sampling strategies (circled in red) are implemented in this repository, as well as the baseline method U-Net.
 
-![3D Unet](https://github.com/AghdamAmir/3D-UNet/blob/main/3D-UNET.png)
+![UNet-GCCM](https://github.com/AghdamAmir/3D-UNet/blob/main/UNet-GCCM.png)
 
 ## Dataset
 
-The Dataset class used for training the network is specially adapted to be used for the **Medical Segmentation Decathlon challenge**. 
+The synthetic data used in the experiment is from [DeepVesselNet Datasets](https://github.com/giesekow/deepvesselnet/wiki/Datasets#time-of-flight-tof-magnetic-resonance-angiography-mra-data). The dataset is in nifti format, and nibabel library is used to read in the data.
 
-This dataset contains several segmentation tasks on various organs including **Liver Tumours, Brain Tumours, Hippocampus, Lung Tumours, Prostate, Cardiac,
-Pancreas Tumour, Colon Cancer, Hepatic Vessels and Spleen segmentation**.
+The real dataset cannot be shared, unfortunately. However, the dataset is in format of hdf5. Ground truth segmentation masks are named "*_seg.h5", and TOF-MRAs are named "*_tof.h5". All files are stored in the same directory.
 
-- Please also note that in the case which the task contain more than 2 classes (1: for foreground, 0: for background), you will need to modify the output
-of the model to reshape it to the size of the groundtruth mask in train.py file.
-
-> The link to the dataset: [http://medicaldecathlon.com/](http://medicaldecathlon.com/)
-
-- The Dataset class uses Monai package for reading MRI or CT and also applying augmentations on them in the transform.py file. You can modify the applied
-transformation in this file according to your preferences.
+The Dataset class uses Monai package for applying augmentations on them in the transform.py file. You can modify the applied transformation in this file according to your preferences.
 
 ## Configure the network
 
-All the configurations and hyperparameters are set in the config.py file.
-Please note that you need to change the path to the dataset directory in the config.py file before running the model.
-
-**Parameters:**
-
-- DATASET_PATH -> the directory path to dataset .tar files
-
-- TASK_ID -> specifies the the segmentation task ID (see the dict below for hints)
-
-- IN_CHANNELS -> number of input channels
-
-- NUM_CLASSES -> specifies the number of output channels for dispirate classes
-
-- BACKGROUND_AS_CLASS -> if True, the model treats background as a class
-
-- TRAIN_VAL_TEST_SPLIT -> delineates the ratios in which the dataset shoud be splitted. The length of the array should be 3.
-
-- TRAINING_EPOCH -> number of training epochs
-
-- VAL_BATCH_SIZE -> specifies the batch size of the training DataLoader
-
-- TEST_BATCH_SIZE -> specifies the batch size of the test DataLoader
-
-- TRAIN_CUDA -> if True, moves the model and inference onto GPU
-
-- BCE_WEIGHTS -> the class weights for the Binary Cross Entropy loss
+All the configurations and hyperparameters are set in the config.py file. Please refer to the documentation inside the file to set the corresponding parameters. In particular, 
+- To use the model U-Net, ensure to set GCCM as False;
+- To use the model UNet-GCCM-max, set GCCM as True and FEATURE_SAMPLING as 'max';
+- To use the model UNet-GCCM-avg, set GCCM as True and FEATURE_SAMPLING as 'avg'.
 
 ## Training
 
@@ -61,4 +31,8 @@ After configure config.py, you can start to train by running
 
 We also employ tensorboard to visualize the training process.
 
-`tensorboard --logdir=runs/`
+`tensorboard --logdir=logs/`
+
+## Testing
+
+After training is done, there will be files of model weights stored in the checkpoints/ directory. Use these checkpoints for testing. Note that the evaluation metrics will be printed out when testing is done. In addition, for qualitative analysis, the .stl files representing the mesh extracted from ground truth and predictions will be stored in the specified directory.
