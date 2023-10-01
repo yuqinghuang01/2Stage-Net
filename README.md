@@ -6,7 +6,7 @@ This implementation is an extension of the method proposed in the paper [3D Grap
 
 GCCM based on GAT is integrated with U-Net during the training stage to add connectivity constraints. Two feature sampling strategies (circled in red) are implemented in this repository, as well as the baseline method U-Net.
 
-![UNet-GCCM](https://github.com/AghdamAmir/3D-UNet/blob/main/UNet-GCCM.png)
+![UNet-GCCM](https://github.com/yuqinghuang01/UNet-GCCM/blob/main/UNet-GCCM.png)
 
 ## Dataset
 
