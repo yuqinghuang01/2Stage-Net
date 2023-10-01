@@ -46,11 +46,11 @@ elif not torch.cuda.is_available() and TRAIN_CUDA:
 # Load best model
 root_dir = "checkpoints/"
 unet.load_state_dict(torch.load(
-    os.path.join(root_dir, "ircadb1_unet_fold1.pth")))
+    os.path.join(root_dir, "synthetic_unet_fold1.pth")))
 gccm.load_state_dict(torch.load(
-    os.path.join(root_dir, "ircadb1_gccm_fold1.pth")))
+    os.path.join(root_dir, "synthetic_gccm_fold1.pth")))
 ours.load_state_dict(torch.load(
-    os.path.join(root_dir, "ircadb1_ours_fold1.pth")))
+    os.path.join(root_dir, "synthetic_ours_fold1.pth")))
 
 _, _, test_dataloader = get_train_val_test_Dataloaders(train_transforms=train_transforms, val_transforms=val_transforms, test_transforms=test_transforms, training_fold=-1)
 precision = Precision(task='binary').to(device)
@@ -120,14 +120,14 @@ for (model, method_str) in zip(models, methods):
             #writer1.SetFileName('./test_ica_stl/'+name+'_seg_'+method_str+'.vtu')
             #writer1.SetInputData(vtk_label_data)
             #writer1.Write()
-            np_to_stl(output, './test_ircadb1_stl/'+name+'_seg_'+method_str+'.stl')
+            np_to_stl(output, './test_synthetic_stl/'+name+'_seg_'+method_str+'.stl')
             print(gt.shape)
             #vtk_gt_data = numpy_support.numpy_to_vtk(num_array=gt.ravel(), deep=True, array_type=vtk.VTK_FLOAT)
             #writer2 = vtk.vtkXMLStructuredGridWriter()
             #writer2.SetFileName('./test_ica_stl/'+name+'_gt.vtu')
             #writer2.SetInputData(vtk_gt_data)
             #writer2.Write()
-            np_to_stl(gt, './test_ircadb1_stl/'+name+'_gt.stl')
+            np_to_stl(gt, './test_synthetic_stl/'+name+'_gt.stl')
 
             '''
             fig = plt.figure()

@@ -20,6 +20,7 @@ class AneurysmSegmentationUSZ(Dataset):
     -- __init__()
     :param vessel_label -> represent the target vessel label
     :param dir_path -> the dataset directory path to .h5 files
+    :param training_fold -> 0...(k-1) indicate which fold during training; -1 indicate testing phase
     :param transform -> optional - transforms to be applied on each instance
     """
     def __init__(self, vessel_label, dir_path, training_fold, transforms = None, mode = None) -> None:
@@ -103,13 +104,6 @@ class AneurysmSegmentationUSZ(Dataset):
 
 
 class SyntheticDataset(Dataset):
-    """
-    The dataset class for Synthetic Dataset segmentation tasks
-    -- __init__()
-    :param vessel_label -> represent the target vessel label
-    :param dir_path -> the dataset directory which contains raw/ and seg/ folders
-    :param transform -> optional - transforms to be applied on each instance
-    """
     def __init__(self, vessel_label, dir_path, training_fold, transforms = None, mode = None) -> None:
         super(SyntheticDataset, self).__init__()
         #Specify the task type

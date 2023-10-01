@@ -34,7 +34,7 @@ val_transforms = val_transform
 criterion = DiceLoss()
 device = 'cpu'
 
-for fold in range(KFOLD):
+for fold in range(1,KFOLD):
 
     count_no_improve = 0
 
@@ -47,6 +47,11 @@ for fold in range(KFOLD):
           dropout=DROPOUT, 
           nheads=NUM_ATTEN_HEADS, 
           alpha=ALPHA)
+    #total_params = sum(p.numel() for p in unet.parameters())
+    #print(total_params)
+    #total_params = sum(p.numel() for p in gat.parameters())
+    #print(total_params)
+    #break
 
     if torch.cuda.is_available() and TRAIN_CUDA:
         unet = unet.cuda()
