@@ -28,4 +28,4 @@ graphs/
 test_*/
 
 # Checkpoints
-checkpoints/synthetic*
+#checkpoints/
